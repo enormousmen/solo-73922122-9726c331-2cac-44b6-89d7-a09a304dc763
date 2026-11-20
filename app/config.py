@@ -25,6 +25,8 @@ class Settings:
     default_ttl_seconds: int = 3600
     min_ttl_seconds: int = 60
     max_ttl_seconds: int = 604800
+    # A relocation hold keeps its in-pool address reserved for this long.
+    hold_ttl_seconds: int = 300
     operator_token: str | None = None
 
     def __post_init__(self) -> None:
@@ -34,6 +36,8 @@ class Settings:
             )
         if self.min_ttl_seconds < 1 or self.max_ttl_seconds < self.min_ttl_seconds:
             raise RuntimeError("invalid TTL bounds")
+        if self.hold_ttl_seconds < 1:
+            raise RuntimeError("HOLD_TTL_SECONDS must be a positive integer")
         try:
             parse_pool_cidr(self.default_pool_cidr)
         except PoolError as exc:
@@ -48,6 +52,7 @@ class Settings:
             default_ttl_seconds=_env_int("DEFAULT_TTL_SECONDS", cls.default_ttl_seconds),
             min_ttl_seconds=_env_int("MIN_TTL_SECONDS", cls.min_ttl_seconds),
             max_ttl_seconds=_env_int("MAX_TTL_SECONDS", cls.max_ttl_seconds),
+            hold_ttl_seconds=_env_int("HOLD_TTL_SECONDS", cls.hold_ttl_seconds),
             operator_token=token.strip() if token and token.strip() else None,
         )
 

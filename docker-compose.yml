@@ -11,6 +11,8 @@ services:
       DEFAULT_TTL_SECONDS: "${DEFAULT_TTL_SECONDS:-3600}"
       MIN_TTL_SECONDS: "${MIN_TTL_SECONDS:-60}"
       MAX_TTL_SECONDS: "${MAX_TTL_SECONDS:-604800}"
+      # Relocation holds keep their reserved address for this many seconds.
+      HOLD_TTL_SECONDS: "${HOLD_TTL_SECONDS:-300}"
       # Empty means the demo is open; set a value to require X-Operator-Token.
       OPERATOR_TOKEN: "${OPERATOR_TOKEN:-}"
     volumes:

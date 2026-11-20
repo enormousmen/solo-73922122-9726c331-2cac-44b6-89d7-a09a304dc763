@@ -23,8 +23,14 @@ Single-subnet IPv4 DHCP-style lease API.
 * **Renew / release** (`POST /v1/leases/{lease_id}/renew|release`) require the
   current lease id.  An address that fell outside the current pool can be
   released but not renewed.
+* **Relocation holds** let an operator reserve the lowest free in-pool address
+  against a still-valid out-of-pool lease (`POST /v1/holds`), then confirm the
+  move in the maintenance window (`POST /v1/holds/{hold_id}/confirm`).  Holds
+  live for five minutes; ending the source lease or the hold deadline frees the
+  address immediately.
 * **Pool switch** (`PUT /v1/pool`) is atomic: it either fully commits or the
-  previous pool keeps serving.  The pool and all leases survive restarts.
+  previous pool keeps serving.  A switch that would strand a held address is
+  rejected.  The pool and all leases survive restarts.
 * **Operators** (`GET /v1/admin/out-of-pool`) can list still-occupied
   addresses that lie outside the current pool, with their expiry times.
 """
@@ -57,6 +63,20 @@ class PoolRequest(BaseModel):
     cidr: str = Field(min_length=1, max_length=32)
 
 
+class HoldRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lease_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("lease_id")
+    @classmethod
+    def _strip_lease_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("lease_id must not be blank")
+        return value
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str
@@ -79,7 +99,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     app = FastAPI(
         title="Branch Gateway Lease API",
-        version="1.0.0",
+        version="1.1.0",
         description=DESCRIPTION,
         lifespan=lifespan,
     )
@@ -188,6 +208,60 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         lease, already = store.release(lease_id)
         lease["already_released"] = already
         return lease
+
+    # ------------------------------------------------------------------ holds
+
+    @app.post(
+        "/v1/holds",
+        tags=["holds"],
+        summary="Reserve the lowest free in-pool address for an out-of-pool lease (operator)",
+        status_code=status.HTTP_201_CREATED,
+        responses={200: {"description": "Existing valid hold returned"}},
+    )
+    def create_hold(
+        body: HoldRequest,
+        response: Response,
+        store: Store = Depends(get_store),
+        _: None = Depends(require_operator),
+    ) -> dict[str, Any]:
+        hold, reused = store.create_hold(body.lease_id)
+        hold["reused"] = reused
+        if reused:
+            response.status_code = status.HTTP_200_OK
+        else:
+            response.status_code = status.HTTP_201_CREATED
+            response.headers["Location"] = f"/v1/holds/{hold['hold_id']}"
+        return hold
+
+    @app.get(
+        "/v1/holds/{hold_id}",
+        tags=["holds"],
+        summary="Inspect a relocation hold",
+    )
+    def get_hold(
+        hold_id: str,
+        store: Store = Depends(get_store),
+        _: None = Depends(require_operator),
+    ) -> dict[str, Any]:
+        return store.get_hold(hold_id)
+
+    @app.post(
+        "/v1/holds/{hold_id}/confirm",
+        tags=["holds"],
+        summary="Confirm a valid hold: end the old lease and issue the new one (operator)",
+    )
+    def confirm_hold(
+        hold_id: str,
+        store: Store = Depends(get_store),
+        _: None = Depends(require_operator),
+    ) -> dict[str, Any]:
+        hold, new_lease, reused = store.confirm_hold(hold_id)
+        return {
+            "hold": hold,
+            "new_lease_id": new_lease["lease_id"],
+            "new_lease": new_lease,
+            "reused": reused,
+        }
 
     # ----------------------------------------------------------------- admin
 
